@@ -1,0 +1,289 @@
+---
+title: "Employee Attrition Analysis for IBM HR Data"
+---
+
+
+```{r, echo = FALSE}
+library(tidyverse)    
+library(magrittr)    
+library(cluster)    
+library(cluster.datasets)    
+library(cowplot)    
+library(NbClust)    
+library(clValid)    
+library(ggfortify)    
+library(clustree)    
+library(dendextend)    
+library(factoextra)    
+library(FactoMineR)    
+library(corrplot)    
+library(GGally)    
+library(ggiraphExtra)    
+library(knitr)    
+library(kableExtra)
+
+```
+
+
+```{r}
+#load data saved as rds
+hrDataRaw <- read_rds("IBM-HR-Data-Full.rds")
+hrDataRaw <- as.data.frame(hrDataRaw)
+glimpse(hrDataRaw)
+```
+
+
+## Preprocessing Data
+
+```{r}
+#remove variables that are not useful
+row.names(hrDataRaw) <- hrDataRaw$EmployeeNumber
+hrData <- hrDataRaw%>%select(-StandardHours, -Over18, -EmployeeCount, -EmployeeNumber)
+```
+
+
+```{r}
+#check for missing values
+sum(!complete.cases(hrData))
+
+#in detail
+sapply(hrData, function(x) sum(is.na(x)))
+```
+There are no missing values, no need to impute/fill in values.
+
+
+```{r}
+#convert categorical variables to factors
+hrData$Attrition<-factor(hrData$Attrition)
+hrData$BusinessTravel<-factor(hrData$BusinessTravel)
+hrData$Department<-factor(hrData$Department)
+hrData$Education <- factor(hrData$Education)
+hrData$EducationField<-factor(hrData$EducationField)
+hrData$EnvironmentSatisfaction <- factor(hrData$EnvironmentSatisfaction)
+hrData$Gender<-factor(hrData$Gender)
+hrData$JobRole<-factor(hrData$JobRole)
+hrData$JobInvolvement <- factor(hrData$JobInvolvement)
+hrData$JobLevel <- factor(hrData$JobLevel)
+hrData$JobSatisfaction <- factor(hrData$JobSatisfaction)
+hrData$MaritalStatus<-factor(hrData$MaritalStatus)
+hrData$OverTime<-factor(hrData$OverTime)
+hrData$PerformanceRating <- factor(hrData$PerformanceRating)
+hrData$RelationshipSatisfaction <- factor(hrData$RelationshipSatisfaction)
+hrData$StockOptionLevel <- factor(hrData$StockOptionLevel)
+hrData$WorkLifeBalance <- factor(hrData$WorkLifeBalance)
+```
+
+
+# Data Exploration
+```{r}
+# convert attrition to binary
+hrData$AttrBin <- if_else(hrData$Attrition=="Yes",1,0)
+
+#convert overtime to binary
+hrData$OverTimeBin <- if_else(hrData$OverTime == "Yes", 1, 0)
+
+#create new object with all the categorical variables removed
+hrDataNum <- hrData %>% select(AttrBin, OverTimeBin, Age, DailyRate, DistanceFromHome, HourlyRate, MonthlyIncome, MonthlyRate, NumCompaniesWorked, PercentSalaryHike, TotalWorkingYears, TrainingTimesLastYear, YearsAtCompany, YearsInCurrentRole, YearsSinceLastPromotion, YearsWithCurrManager)
+
+#view table
+summary(hrDataNum) %>% kable() %>% kable_styling()
+```
+
+
+```{r}
+# also create an object with only categorical variables
+hrDataCat <- hrData%>%select(Attrition, BusinessTravel, Department, Education, EducationField, EnvironmentSatisfaction, Gender, JobRole, JobInvolvement, JobLevel, JobSatisfaction, MaritalStatus, OverTime, PerformanceRating, RelationshipSatisfaction, StockOptionLevel, WorkLifeBalance)
+summary(hrDataCat) %>% kable() %>% kable_styling()
+```
+
+
+## Understanding the data
+All the variables are expressed as numeric. What about the statistical distribution?
+```{r}
+hrDataNum %>%     
+  gather(Attributes, value, 3:8) %>%     
+  ggplot(aes(x=value)) +    
+  geom_histogram(fill = "lightblue2", color = "black") +     
+  facet_wrap(~Attributes, scales = "free_x") +    
+  labs(x = "Value", y = "Frequency")
+
+hrDataNum %>%     
+  gather(Attributes, value, 9:12) %>%     
+  ggplot(aes(x=value)) +    
+  geom_histogram(fill = "lightblue2", color = "black") +     
+  facet_wrap(~Attributes, scales = "free_x") +    
+  labs(x = "Value", y = "Frequency")
+
+hrDataNum %>%     
+  gather(Attributes, value, 13:16) %>%     
+  ggplot(aes(x=value)) +    
+  geom_histogram(fill = "lightblue2", color = "black") +     
+  facet_wrap(~Attributes, scales = "free_x") +    
+  labs(x = "Value", y = "Frequency")
+```
+
+### More Exploration
+What’s the relationship between the different attributes? 
+Use `corrplot()` to create correlation matrix.
+```{r}
+#correlation plot
+corrplot(cor(hrDataNum), type = "full", method = "ellipse", tl.cex = 0.9)
+```
+
+```{r}
+#remove variables with high correlation
+hrDataNumSelect <- hrDataNum %>% select(Age, DailyRate, DistanceFromHome, HourlyRate, MonthlyIncome, MonthlyRate, NumCompaniesWorked, PercentSalaryHike, TrainingTimesLastYear, YearsAtCompany, AttrBin)
+
+```
+
+
+When you have variables which are measured in different scales it is useful to scale the data.
+```{r}
+hrDataNum_scaled <- scale(hrDataNumSelect)    
+rownames(hrDataNum_scaled) <- rownames(hrDataNumSelect)
+glimpse(hrDataNum_scaled)
+```
+
+Dimensionality reduction can help with data visualization (e.g. PCA method).
+
+```{r}
+res.pca <- PCA(hrDataNum_scaled,  graph = FALSE)
+# Visualize eigenvalues/variances    
+fviz_screeplot(res.pca, addlabels = TRUE, ylim = c(0, 50))
+```
+
+These are the 6 PCs that capture 80% of the variance. The scree plot shows that PC1 captured ~ 20.2% of the variance.
+
+
+```{r}
+# Extract the results for variables    
+var <- get_pca_var(res.pca)
+# Contributions of variables to PC1    
+fviz_contrib(res.pca, choice = "var", axes = 1, top = 10)
+# Contributions of variables to PC2    
+fviz_contrib(res.pca, choice = "var", axes = 2, top = 10)
+# Contributions of variables to PC3
+fviz_contrib(res.pca, choice = "var", axes = 3, top = 10)
+# Contributions of variables to PC4
+fviz_contrib(res.pca, choice = "var", axes = 4, top = 10)
+
+```
+
+
+
+```{r}
+# Control variable colors using their contributions to the principle axis    
+fviz_pca_var(res.pca, col.var="contrib",    
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),    
+             repel = TRUE # Avoid text overlapping    
+             ) + theme_minimal() + ggtitle("Variables - PCA")
+```
+
+```{r}
+
+kmean_calc <- function(df, ...){
+  kmeans(df, scaled = ..., nstart = 30)
+}
+#two clusters
+
+km2 <- kmean_calc(hrDataNum_scaled, 2)    
+km3 <- kmean_calc(hrDataNum_scaled, 3)    
+km4 <- kmean_calc(hrDataNum_scaled, 4)    
+km5 <- kmean_calc(hrDataNum_scaled, 5)    
+km6 <- kmean_calc(hrDataNum_scaled, 6)    
+km7 <- kmean_calc(hrDataNum_scaled, 7)    
+km8 <- kmean_calc(hrDataNum_scaled, 8)    
+km9 <- kmean_calc(hrDataNum_scaled, 9)    
+km10 <- kmean_calc(hrDataNum_scaled, 10)    
+km11 <- kmean_calc(hrDataNum_scaled, 11)
+p1 <- fviz_cluster(km2, data = hrDataNum_scaled, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 2")     
+p2 <- fviz_cluster(km3, data = hrDataNum_scaled, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 3")    
+p3 <- fviz_cluster(km4, data = hrDataNum_scaled, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 4")    
+p4 <- fviz_cluster(km5, data = hrDataNum_scaled, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 5")    
+p5 <- fviz_cluster(km6, data = hrDataNum_scaled, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 6")    
+p6 <- fviz_cluster(km7, data = hrDataNum_scaled, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 7")
+plot_grid(p1, p2, p3, p4, p5, p6, labels = c("k2", "k3", "k4", "k5", "k6", "k7"))
+```
+
+### Determining Optimal Number of Clusters
+```{r}
+#the elbow method
+set.seed(31)
+# function to compute total within-cluster sum of squares
+fviz_nbclust(hrDataNum_scaled, kmeans, method = "wss", k.max = 24) + theme_minimal() + ggtitle("The Elbow Method")
+
+```
+The Elbow Curve method is helpful because it shows how increasing the number of the clusters contribute separating the clusters in a meaningful way, not in a marginal way. The bend indicates that additional clusters beyond the fifth have little value.
+
+### The Gap Statistic
+```{r}
+gap_stat <- clusGap(hrDataNum_scaled, FUN = kmeans, nstart = 30, K.max = 24, B = 50)
+fviz_gap_stat(gap_stat) + theme_minimal() + ggtitle("fviz_gap_stat: Gap Statistic")
+```
+
+### The Silhouette Method
+```{r}
+fviz_nbclust(hrDataNum_scaled, kmeans, method = "silhouette", k.max = 24) + theme_minimal() + ggtitle("The Silhouette Plot")
+```
+
+
+### The Sum of Squares Method
+
+```{r}
+ssc <- data.frame(
+  kmeans = c(2,3,4,5,6,7,8),
+  within_ss = c(mean(km2$withinss), mean(km3$withinss), mean(km4$withinss), mean(km5$withinss), mean(km6$withinss), mean(km7$withinss), mean(km8$withinss)),
+  between_ss = c(km2$betweenss, km3$betweenss, km4$betweenss, km5$betweenss, km6$betweenss, km7$betweenss, km8$betweenss)
+)
+ssc %<>% gather(., key = "measurement", value = value, -kmeans)
+#ssc$value <- log10(ssc$value)
+ssc %>% ggplot(., aes(x=kmeans, y=log10(value), fill = measurement)) + geom_bar(stat = "identity", position = "dodge") + ggtitle("Cluster Model Comparison") + xlab("Number of Clusters") + ylab("Log10 Total Sum of Squares") + scale_x_discrete(name = "Number of Clusters", limits = c("0", "2", "3", "4", "5", "6", "7", "8"))
+```
+
+
+### NbClust
+The NbClust package provides 30 indices for determining the relevant number of clusters and proposes to users the best clustering scheme from the different results obtained by varying all combinations of number of clusters, distance measures, and clustering methods.
+```{r}
+res.nbclust <- NbClust(hrDataNum_scaled, distance = "euclidean",
+                  min.nc = 2, max.nc = 9, 
+                  method = "complete", index ="all")
+factoextra::fviz_nbclust(res.nbclust) + theme_minimal() + ggtitle("NbClust's optimal number of clusters")
+```
+
+
+### Clustree
+```{r}
+tmp <- NULL
+for (k in 1:11){
+  tmp[k] <- kmeans(hrDataNum_scaled, k, nstart = 30)
+}
+df <- data.frame(tmp)
+# add a prefix to the column names
+colnames(df) <- seq(1:11)
+colnames(df) <- paste0("k",colnames(df))
+# get individual PCA
+df.pca <- prcomp(df, center = TRUE, scale. = FALSE)
+ind.coord <- df.pca$x
+ind.coord <- ind.coord[,1:2]
+df <- bind_cols(as.data.frame(df), as.data.frame(ind.coord))
+clustree(df, prefix = "k")
+```
+In this figure the size of each node corresponds to the number of samples in each cluster, and the arrows are coloured according to the number of samples each cluster receives. A separate set of arrows, the transparent ones, called the incoming node proportion, are also coloured and shows how samples from one group end up in another group — an indicator of cluster instability.
+
+
+#### Overlaying dimensions
+```{r}
+df_subset <- df %>% select(1:8,12:13)
+clustree_overlay(df_subset, prefix = "k", x_value = "PC1", y_value = "PC2")
+```
+
+### Choosing the appropriate algorithm
+```{r}
+intern <- clValid(hrDataNum_scaled, nClust = 2:10, 
+              clMethods = c("hierarchical","kmeans","pam"), validation = "internal")
+# Summary
+summary(intern) %>% kable() %>% kable_styling()
+```
+
+
+

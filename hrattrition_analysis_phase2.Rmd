@@ -1,0 +1,240 @@
+---
+title: "Employee Attrition Analysis for IBM HR Data"
+---
+
+```{r, echo = FALSE}
+library(tidyverse)    
+library(magrittr)    
+library(cluster)    
+library(cluster.datasets)    
+library(cowplot)    
+library(NbClust)    
+library(clValid)    
+library(ggfortify)    
+library(clustree)    
+library(dendextend)    
+library(factoextra)    
+library(FactoMineR)    
+library(corrplot)    
+library(GGally)    
+library(ggiraphExtra)    
+library(knitr)    
+library(kableExtra)
+library(caret)
+library(alluvial)
+library(ROCR)
+
+```
+
+
+```{r}
+#load data saved as rds
+hrDataRaw <- read_rds("IBM-HR-Data-Full.rds")
+hrDataRaw <- as.data.frame(hrDataRaw)
+glimpse(hrDataRaw)
+```
+
+
+## Preprocessing Data
+```{r}
+#remove variables that are not useful
+row.names(hrDataRaw) <- hrDataRaw$EmployeeNumber
+hrData <- hrDataRaw%>%select(-StandardHours, -Over18, -EmployeeCount, -EmployeeNumber)
+
+# convert attrition to binary
+hrData$AttrBin <- if_else(hrData$Attrition=="Yes",1,0)
+
+# convert overtime to binary
+hrData$OverTimeBin <- if_else(hrData$OverTime == "Yes", 1, 0)
+```
+
+
+```{r}
+#check for missing values
+sum(!complete.cases(hrData))
+
+#in detail
+sapply(hrData, function(x) sum(is.na(x)))
+```
+There are no missing values, no need to impute/fill in values.
+
+
+```{r}
+#convert categorical variables to factors
+hrData$Attrition<-factor(hrData$Attrition)
+hrData$BusinessTravel<-factor(hrData$BusinessTravel)
+hrData$Department<-factor(hrData$Department)
+hrData$Education <- factor(hrData$Education)
+hrData$EducationField<-factor(hrData$EducationField)
+hrData$EnvironmentSatisfaction <- factor(hrData$EnvironmentSatisfaction)
+hrData$Gender<-factor(hrData$Gender)
+hrData$JobRole<-factor(hrData$JobRole)
+hrData$JobInvolvement <- factor(hrData$JobInvolvement)
+hrData$JobLevel <- factor(hrData$JobLevel)
+hrData$JobSatisfaction <- factor(hrData$JobSatisfaction)
+hrData$MaritalStatus<-factor(hrData$MaritalStatus)
+hrData$OverTime<-factor(hrData$OverTime)
+hrData$PerformanceRating <- factor(hrData$PerformanceRating)
+hrData$RelationshipSatisfaction <- factor(hrData$RelationshipSatisfaction)
+hrData$StockOptionLevel <- factor(hrData$StockOptionLevel)
+hrData$WorkLifeBalance <- factor(hrData$WorkLifeBalance)
+```
+
+
+# Data Exploration
+```{r}
+#distribution of the dependent variable
+table(hrData$Attrition)
+```
+
+As expected, the data is not distributed evenly. We will need to further understand the data to decide how we can go about it.
+
+## Understanding the data
+```{r}
+#break down the data into two different dataset
+# Attrition= Yes
+nonAttr <- hrData %>% filter(Attrition=="Yes")
+
+#Attrition = No
+attr <- hrData %>% filter(Attrition=="No")
+
+table(nonAttr$JobRole)
+table(attr$JobRole)
+
+table(nonAttr$BusinessTravel)
+table(attr$BusinessTravel)
+
+
+#for the continuous variables, lets check the mean
+mean(nonAttr$MonthlyIncome)
+mean(attr$MonthlyIncome)
+
+mean(nonAttr$PercentSalaryHike)
+mean(attr$PercentSalaryHike)
+
+mean(nonAttr$YearsSinceLastPromotion)
+mean(attr$YearsSinceLastPromotion)
+
+mean(nonAttr$Age)
+mean(attr$Age)
+
+```
+
+```{r}
+boxplot(
+  Age~Attrition,
+  data=hrData,
+  main="Age vs Attrition",
+  xlab="Attrition",
+  ylab="Age")
+```
+
+```{r}
+boxplot(MonthlyIncome~Attrition,data=hrData, main="Monthly Income vs Attrition", 
+   xlab="Attrition", ylab="Income per month")
+```
+
+
+## Finding patterns in data
+```{r}
+p <- hrData %>%
+  group_by(Gender, BusinessTravel, Attrition)%>%
+  count()
+  
+alluvial(p[,1:2], freq=p$n, border=NA,
+         #hide = p$n < quantile(p$n,.50),
+         col=ifelse(p$Attrition == "Yes", "red", "gray"))
+
+female <- hrData %>% filter(Gender == "Female")
+femaleFrequentTraveller <- hrData %>% filter(Gender == "Female", BusinessTravel == "Travel_Frequently")
+
+table(female$Attrition)
+table(femaleFrequentTraveller$Attrition)
+```
+The frequent travelling female seem to be leaving the company at higher rate than the regular females.
+
+
+
+### More Exploration
+```{r}
+#create new object with all the categorical variables removed
+hrDataNum <- hrData %>% select(AttrBin, Age, DailyRate, DistanceFromHome, HourlyRate, MonthlyIncome, MonthlyRate, NumCompaniesWorked, OverTimeBin, PercentSalaryHike, TotalWorkingYears, TrainingTimesLastYear, YearsAtCompany, YearsInCurrentRole, YearsSinceLastPromotion, YearsWithCurrManager)
+
+#view table
+summary(hrDataNum) %>% kable() %>% kable_styling()
+```
+
+
+What’s the relationship between the different attributes? 
+Use `corrplot()` to create correlation matrix.
+```{r}
+#correlation plot
+corrplot(cor(hrDataNum), type = "full", method = "ellipse", tl.cex = 0.9)
+```
+
+
+```{r}
+# also create an object with only categorical variables
+hrDataCat <- hrData%>%select(Attrition, BusinessTravel, Department, Education, EducationField, EnvironmentSatisfaction, Gender, JobRole, JobInvolvement, JobLevel, JobSatisfaction, MaritalStatus, OverTime, PerformanceRating, RelationshipSatisfaction, StockOptionLevel, WorkLifeBalance)
+summary(hrDataCat) %>% kable() %>% kable_styling()
+```
+
+
+# Build Model
+1. Create a base model: with only numerical variables
+2. Evaluate the model
+3. Fix issues
+4. Optimization
+
+In all we have 34 features consisting of both the categorical as well as the numerical features. The target variable is the 'Attrition' of the employee which can be either a Yes or a No. This is what we have to predict.
+
+Hence this is a Binary Classification problem.
+
+```{r}
+# Build train & test
+set.seed(9876)
+train <- sample(1:nrow(hrDataNum), nrow(hrDataNum)*.7)
+test <- -train
+
+trainData <- hrDataNum[train,]
+testData <- hrDataNum[test,]
+```
+
+
+```{r}
+#start with a full model
+model1 <- glm(AttrBin~., data=trainData, family = binomial(link="logit"))
+
+summary(model1)
+```
+The overtime indicator, age, distance from home, number of companies worked are the most significant indicators in this model.
+
+
+```{r}
+#looking for multi collinearity
+car::vif(model1)
+```
+There is problems with multi-collinearity with the total working years, monthly income, years at company, years in current role which could be removed while building the next model.
+
+
+```{r}
+# Accesing the predective ability of the logistic regression model
+predictTest1 <- predict(model1, newdata = testData, type='response')
+
+#setting up cutoff at 0.5
+predictTest1 <- if_else((predictTest1 >= 0.5), 1, 0)
+
+# Create confusion matrix
+caret::confusionMatrix(factor(predictTest1), factor(testData$AttrBin))
+```
+Gives an accuracy of 85% and a sensitivity of 96%, but the multi collinearity issue is significant. We need to build a better model.
+
+
+```{r}
+# Plotting the ROC curve
+predictTrain1 <- predict(model1, trainData, type = "response")
+ROCRPred <- prediction(predictTrain1, trainData$AttrBin)
+ROCRPerf <- performance(ROCRPred,"tpr","fpr")
+plot(ROCRPerf,colorize = TRUE, print.cutoffs.at = seq(0.1, by = 0.1))
+```
+

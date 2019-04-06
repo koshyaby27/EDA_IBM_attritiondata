@@ -1,0 +1,258 @@
+---
+title: "Employee Attrition Analysis for IBM HR Data"
+---
+
+```{r, echo=FALSE}
+library(readxl)
+library(tidyverse)
+library(moments)
+library(car)
+library(lmerTest)
+library(pROC)
+```
+
+
+```{r}
+#load data saved as rds
+hrData <- read_rds("IBM-HR-Data-Full.rds")
+
+#view variables
+str(hrData)
+```
+
+
+## Preprocessing Data
+```{r}
+#check for missing values
+sum(!complete.cases(hrData))
+```
+There are no missing values, no need to impute/fill in values.
+
+
+```{r}
+#convert categorical variables to factors
+hrData$Attrition<-factor(hrData$Attrition)
+hrData$BusinessTravel<-factor(hrData$BusinessTravel)
+hrData$Department<-factor(hrData$Department)
+hrData$EducationField<-factor(hrData$EducationField)
+hrData$Gender<-factor(hrData$Gender)
+hrData$JobRole<-factor(hrData$JobRole)
+hrData$MaritalStatus<-factor(hrData$MaritalStatus)
+hrData$Over18<-factor(hrData$Over18)
+hrData$OverTime<-factor(hrData$OverTime)
+
+#remove variables that are not useful for analysis
+hrData <- hrData%>%select(-EmployeeCount,-EmployeeNumber)
+
+#taking a glimpse of how the data looks
+glimpse(hrData)
+```
+
+
+# Data Exploration
+```{r}
+#distribution of the dependent variable
+table(hrData$Attrition)
+```
+
+As expected, the data is not distributed evenly. We will need to further understand the data to decide how we can go about it.
+
+## Understanding the data
+```{r}
+#break down the data into two different dataset
+# Attrition= Yes
+nonAttr <- hrData %>% filter(Attrition=="Yes")
+
+#Attrition = No
+attr <- hrData %>% filter(Attrition=="No")
+
+
+
+table(nonAttr$JobRole)
+table(attr$JobRole)
+
+table(nonAttr$BusinessTravel)
+table(attr$BusinessTravel)
+
+
+#for the continuous variables, lets check the mean
+mean(nonAttr$MonthlyIncome)
+mean(attr$MonthlyIncome)
+
+mean(nonAttr$WorkLifeBalance)
+mean(attr$WorkLifeBalance)
+
+mean(nonAttr$PercentSalaryHike)
+mean(attr$PercentSalaryHike)
+
+mean(nonAttr$YearsSinceLastPromotion)
+mean(attr$YearsSinceLastPromotion)
+
+mean(nonAttr$StandardHours)
+mean(attr$StandardHours)
+
+mean(nonAttr$PerformanceRating)
+mean(attr$PerformanceRating)
+
+mean(nonAttr$RelationshipSatisfaction)
+mean(attr$RelationshipSatisfaction)
+
+
+```
+
+```{r}
+#check distribution of age & other categorical variables
+table(nonAttr = nonAttr$Age)
+table(attr = attr$Age)
+
+
+mean(nonAttr$Age)
+mean(attr$Age)
+
+
+boxplot(
+  Age~Attrition,
+  data=hrData,
+  main="Age vs Attrition",
+  xlab="Attrition",
+  ylab="Age")
+```
+
+```{r}
+boxplot(MonthlyIncome~Attrition,data=hrData, main="Monthly Income vs Attrition", 
+   xlab="Attrition", ylab="Income per month")
+```
+
+
+```{r}
+plot(MonthlyIncome~Attrition, data= hrData)
+```
+
+
+## Finding patterns in data
+```{r}
+female <- hrData %>% filter(Gender == "Female")
+femaleFrequentTraveller <- hrData %>% filter(Gender == "Female", BusinessTravel == "Travel_Frequently")
+
+
+
+table(female$Attrition)
+table(femaleFrequentTraveller$Attrition)
+```
+The frequent travelling female seem to be leaving the company at higher rate than the regular females.
+
+
+```{r}
+input_ones <- hrData[which(hrData$Attrition == "Yes"), ]  # all 1's
+input_TWO <- hrData[which(hrData$Attrition == "No"), ]  # all 0's
+set.seed(100)  # for repeatability of samples
+input_ones_training_rows <- sample(1:nrow(input_ones), 0.7*nrow(input_ones))  # 1's for training
+input_twos_training_rows <- sample(1:nrow(input_TWO), 0.7*nrow(input_ones))  # 0's for training. Pick as many 0's as 1's
+training_ones <- input_ones[input_ones_training_rows, ]  
+training_Two <- input_TWO[input_twos_training_rows, ]
+trainingData <- rbind(training_ones, training_Two)  # row bind the 1's and 0's \
+
+table(trainingData$Attrition)
+```
+
+##Creating Test Data
+```{r}
+
+str(hrData)
+testones<- input_ones[-input_ones_training_rows,]
+testTwo<- input_TWO[-input_twos_training_rows,]
+
+testData <- rbind(testones, testTwo)
+
+```
+
+##CREATING A MODEL
+
+```{r}
+colnames(hrData)
+## converting varibales into factor
+hrData$BusinessTravel<- as.factor(hrData$BusinessTravel)
+hrData$EducationField<-as.factor(hrData$EducationField)
+hrData$Gender<- as.factor(hrData$Gender)
+hrData$JobRole<- as.factor(hrData$JobRole)
+str(hrData)
+
+model<- glm(Attrition~., data=df, family = binomial)
+summary(model)
+car::vif(model)
+Predicted<- predict(model, trainingData, type ="response")
+View(Predicted)
+
+Predictedtest<-predict(model, df2, type ="response")
+
+length(unique(hrData$StandardHours))
+
+```
+
+
+#
+```{r}
+roc(df2$Attrition,Predictedtest)     #roc for testdata
+#plot ROC
+plot.roc(testData$Attrition, Predictedtest)   #roc plot for testdata
+
+```
+
+#creating model with only few variables.
+
+```{r}
+str(hrData)
+model <- glm(Attrition ~ Age + JobRole + TrainingTimesLastYear + YearsSinceLastPromotion + WorkLifeBalance, data=trainingData, family = binomial)
+summary(model)
+
+Predicted<- predict(model, trainingData, type ="response")
+View(Predicted)
+
+Predictedtest<-predict(model, testData, type ="response")
+
+roc(testData$Attrition,Predictedtest)     #roc for testdata
+
+#plot ROC
+plot.roc(testData$Attrition, Predictedtest)   #roc plot for testdata
+```
+
+
+#Creating Graphs
+
+```{r}
+plot(hrData$Attrition, hrData$Age, xlab = "ATTRITION", ylab = "AGE",col="red")
+
+plot(hrData$Attrition, hrData$BusinessTravel, xlab = "ATTRITION", ylab = "Business Travels",col="Yellow")
+
+plot(hrData$Attrition, hrData$Gender, xlab = "ATTRITION", ylab = "Gender",col="blue")
+
+plot(hrData$Attrition, hrData$JobRole, xlab = "ATTRITION", ylab = "JobRole",col="Yellow")
+
+plot(hrData$Attrition, hrData$TrainingTimesLastYear, xlab = "ATTRITION", ylab = "Business Travels",col="Yellow")
+```
+
+```{r}
+M<-cor(hrData)
+head(round(M,2))
+corrplot(corr, method="circle")
+```
+
+```{r}
+head(hrData)
+```
+
+```{r}
+unique(hrData$BusinessTravel)
+Correlation_check = hrData%>%mutate_if(is.factor,as.numeric)
+corrplot(cor(Correlation_check),method = "number")
+
+M<-cor(hrData)
+head(round(M,2))
+corrplot(M, method="number")
+```
+
+```{r}
+#check multi-collinearity of the model
+car::vif(model)
+```
+
