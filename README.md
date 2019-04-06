@@ -4,4 +4,4 @@ Employee attrition is when employees leave the company. Towards Data Science (20
 The goal with this project is to predict employee attrition. We have used different predictive and correlation functions to understand and predict employee attrition, as well as determine key variables affecting attrition.
 
 Tech used: R
-Packages used: igraph, infomap, dplyr, ggplot
+Packages used: ggiraphExtra, ggfortify , dplyr, ggplot, tidyverse
